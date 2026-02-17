@@ -1,0 +1,181 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+
+}
+
+// ─── ENUMS ───────────────────────────────────────────────
+
+enum Role {
+  STUDENT
+  TEACHER
+  INSTITUTION
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  TRIAL
+}
+
+enum SubjectStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+// ─── INSTITUTION ─────────────────────────────────────────
+
+model Institution {
+  id           String   @id @default(uuid())
+  name         String
+  address      String?
+  phone        String?
+  email        String   @unique
+  logoUrl      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  teachers     Teacher[]
+  students     Student[]
+  classes      Class[]
+  subscription Subscription?
+}
+
+// ─── USER (base for all roles) ───────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  phone        String?
+  avatarUrl    String?
+  role         Role
+  supabaseId   String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  student      Student?
+  teacher      Teacher?
+  subscription Subscription?
+}
+
+// ─── STUDENT ─────────────────────────────────────────────
+
+model Student {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  institutionId String?
+  rollNumber    String?
+  grade         String?
+  createdAt     DateTime @default(now())
+
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  classStudents ClassStudent[]
+  syllabus      SyllabusItem[]
+  performances  Performance[]
+}
+
+// ─── TEACHER ─────────────────────────────────────────────
+
+model Teacher {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  institutionId String?
+  subject       String?
+  createdAt     DateTime @default(now())
+
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  classes       Class[]
+  performances  Performance[]
+}
+
+// ─── CLASS ───────────────────────────────────────────────
+
+model Class {
+  id            String   @id @default(uuid())
+  name          String
+  subject       String?
+  teacherId     String
+  institutionId String?
+  createdAt     DateTime @default(now())
+
+  teacher       Teacher      @relation(fields: [teacherId], references: [id])
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  classStudents ClassStudent[]
+  syllabus      SyllabusItem[]
+}
+
+// ─── CLASS STUDENTS (many to many) ───────────────────────
+
+model ClassStudent {
+  id        String   @id @default(uuid())
+  classId   String
+  studentId String
+  joinedAt  DateTime @default(now())
+
+  class     Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, studentId])
+}
+
+// ─── SYLLABUS ────────────────────────────────────────────
+
+model SyllabusItem {
+  id          String        @id @default(uuid())
+  title       String
+  description String?
+  subject     String?
+  classId     String?
+  studentId   String?
+  status      SubjectStatus @default(NOT_STARTED)
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime      @default(now())
+
+  class       Class?   @relation(fields: [classId], references: [id])
+  student     Student? @relation(fields: [studentId], references: [id])
+}
+
+// ─── PERFORMANCE ─────────────────────────────────────────
+
+model Performance {
+  id        String    @id @default(uuid())
+  studentId String
+  teacherId String
+  subject   String?
+  score     Float?
+  maxScore  Float?
+  remarks   String?
+  examName  String?
+  examDate  DateTime?
+  createdAt DateTime  @default(now())
+
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teacher   Teacher @relation(fields: [teacherId], references: [id])
+}
+
+// ─── SUBSCRIPTION ────────────────────────────────────────
+
+model Subscription {
+  id                 String             @id @default(uuid())
+  userId             String?            @unique
+  institutionId      String?            @unique
+  role               Role
+  status             SubscriptionStatus @default(TRIAL)
+  razorpaySubId      String?
+  razorpayCustomerId String?
+  currentPeriodEnd   DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user               User?        @relation(fields: [userId], references: [id])
+  institution        Institution? @relation(fields: [institutionId], references: [id])
+}
