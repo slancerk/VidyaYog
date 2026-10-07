@@ -1,0 +1,8 @@
+[submodule "server/ee"]
+	path = server/ee
+	url = https://github.com/slancerk/ee-server.git
+	branch = main
+[submodule "frontend/ee"]
+	path = frontend/ee
+	url = https://github.com/slancerk/ee-frontend.git
+	branch = main
