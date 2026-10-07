@@ -3,6 +3,7 @@ name: Release
 # START:  Actions tab -> Release -> Run workflow, pick main or lts-3.16
 #         (optionally type a tag; empty = bump the version automatically).
 # FINISH: runs by itself when a lead merges the version bump PR this workflow opened.
+#         If that ever does not start, Run workflow again with "finish_release" ticked.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +12,11 @@ on:
         required: false
         default: ""
         type: string
+      finish_release:
+        description: "Only if a version bump PR was merged but the release was not published: tick this to finish that release now."
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main, lts-3.16]
     paths: ['.version']
@@ -28,7 +34,7 @@ jobs:
   # ---------------------------------------------------------------- START ---
   # 1. Only the leads for the chosen branch may start a release
   authorize:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.finish_release
     runs-on: ubuntu-latest
     steps:
       - name: Check branch and lead list
@@ -307,28 +313,42 @@ jobs:
   # --------------------------------------------------------------- FINISH ---
   # 3. Did this push come from the version bump PR that the workflow opened?
   detect-bump:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.finish_release
     runs-on: ubuntu-latest
     outputs:
       is_bump: ${{ steps.find.outputs.is_bump }}
+      sha: ${{ steps.find.outputs.sha }}
     steps:
       - name: Find the merged PR
         id: find
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          author=""; head=""
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            SHA="$GITHUB_SHA"
+          else
+            # Finishing by hand: the last commit on this branch that changed .version
+            SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits?sha=$GITHUB_REF_NAME&path=.version&per_page=1" --jq '.[0].sha')
+            echo "Last .version change on $GITHUB_REF_NAME: $SHA"
+          fi
+          # A commit can belong to several PRs (e.g. an open PR from this branch to another one).
+          # Look through all of them for the merged version bump PR into this branch.
+          bump=""; prs=""
           for attempt in 1 2 3; do
-            read -r author head <<< "$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
-              --jq '.[0] | [.user.login, .head.ref] | join(" ")' 2>/dev/null || true)"
-            [ -n "$author" ] && break
+            prs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" \
+              --jq '.[] | "#\(.number) \(.user.login) \(.head.ref) -> \(.base.ref) merged=\(.merged_at != null)"' 2>/dev/null || true)
+            bump=$(printf '%s\n' "$prs" | awk -v b="$GITHUB_REF_NAME" \
+              '$2=="github-actions[bot]" && $3 ~ /^version-bump-v/ && $5==b && $6=="merged=true" {print $3; exit}')
+            [ -n "$bump" ] && break
             sleep 5
           done
-          if [ "$author" = "github-actions[bot]" ] && [[ "$head" == version-bump-v* ]]; then
-            echo "Version bump PR merged ($head)"
+          if [ -n "$bump" ]; then
+            echo "Version bump PR merged ($bump)"
             echo "is_bump=true" >> $GITHUB_OUTPUT
+            echo "sha=$SHA" >> $GITHUB_OUTPUT
           else
-            echo "Not a release version bump (PR author: ${author:-none}, branch: ${head:-none}) - nothing to do"
+            echo "Not a release version bump - nothing to do. PRs found for this commit:"
+            printf '%s\n' "${prs:-  (none)}"
             echo "is_bump=false" >> $GITHUB_OUTPUT
           fi
 
@@ -355,6 +375,8 @@ jobs:
 
       - name: Checkout merged version bump
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.detect-bump.outputs.sha }}
 
       - name: Read release details
         id: release
