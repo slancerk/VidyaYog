@@ -1,7 +1,7 @@
 name: Release
 
 # Actions -> Release -> Run workflow -> pick main (beta) or lts-3.16 (LTS) -> Run.
-# The run checks everything, merges the ee release PRs, bumps and merges the version,
+# The run checks everything, pins the latest ee commits, bumps and merges the version,
 # tags ee-server and ee-frontend, and creates a DRAFT release. The lead who pressed Run
 # gets a Slack message. To release: open the draft, check it, click "Publish release".
 on:
@@ -108,32 +108,7 @@ jobs:
           echo "note=$NOTE" >> "$GITHUB_OUTPUT"
           echo "reuse=$REUSE" >> "$GITHUB_OUTPUT"
 
-      # 3. Merge the open release/* PRs in ee-server and ee-frontend
-      - name: Merge the ee-server and ee-frontend release PRs
-        id: ee-prs
-        env:
-          GH_TOKEN: ${{ secrets.TOKEN_PR }}
-        run: |
-          fail() { echo "::error::$1"; printf '%s\n' "$1" > "$RUNNER_TEMP/reason"; exit 1; }
-          summary=""
-          for repo in ee-server ee-frontend; do
-            prs=$(gh pr list -R "slancerk/$repo" --base "$GITHUB_REF_NAME" --state open --limit 100 \
-                    --json number,headRefName \
-                    --jq '.[] | select(.headRefName | startswith("release/")) | "\(.number) \(.headRefName)"')
-            count=$(printf '%s' "$prs" | grep -c . || true)
-            if [ "$count" -eq 0 ]; then
-              summary+="$repo none found; "
-            elif [ "$count" -gt 1 ]; then
-              fail "$repo has $count open release/* PRs into $GITHUB_REF_NAME. Close the extra ones and run again."
-            else
-              number="${prs%% *}"
-              echo "$repo: merging PR #$number (${prs#* })"
-              gh pr merge -R "slancerk/$repo" "$number" --merge --admin || fail "Could not merge $repo PR #$number"
-              summary+="$repo #$number merged; "
-            fi
-          done
-          echo "summary=${summary%; }" >> "$GITHUB_OUTPUT"
-
+      # 3. Latest commit on the same branch in ee-server and ee-frontend (the team merges ee PRs before Run)
       - name: Find the latest ee-server and ee-frontend commits
         id: ee
         env:
@@ -142,7 +117,7 @@ jobs:
           fail() { echo "::error::$1"; printf '%s\n' "$1" > "$RUNNER_TEMP/reason"; exit 1; }
           for repo in ee-server ee-frontend; do
             sha=$(gh api "repos/slancerk/$repo/branches/$GITHUB_REF_NAME" --jq .commit.sha) \
-              || fail "Cannot read $repo branch $GITHUB_REF_NAME - check that TOKEN_PR can access it"
+              || fail "Cannot read $repo branch $GITHUB_REF_NAME. The TOKEN_PR secret is probably expired or has no access to $repo - create a new token and update the secret."
             echo "$repo -> $sha"
             echo "${repo//-/_}_sha=$sha" >> "$GITHUB_OUTPUT"
           done
@@ -262,14 +237,12 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
           NOTE: ${{ steps.version.outputs.note }}
-          EE: ${{ steps.ee-prs.outputs.summary }}
           DRAFT: ${{ steps.draft.outputs.url }}
           BUMP_PR: ${{ steps.bump.outputs.url }}
         run: |
           if [[ "$TAG" == *-lts* ]]; then TICK='keep "Set as the latest release" ticked'; else TICK='keep "Set as a pre-release" ticked'; fi
           TEXT="${MENTION} :memo: Draft *$TAG* (\`$GITHUB_REF_NAME\`) is ready."
           [ -z "$NOTE" ] || TEXT+=$'\n'":warning: $NOTE"
-          TEXT+=$'\n'"ee release PRs: $EE"
           TEXT+=$'\n'"Version bump PR (merged into \`$GITHUB_REF_NAME\`): ${BUMP_PR:-not needed, .version and submodules were already up to date}"
           TEXT+=$'\n\n'"Check the draft and click *Publish release* ($TICK): $DRAFT"
           printf '### %s\n' "$TEXT" >> "$GITHUB_STEP_SUMMARY"
